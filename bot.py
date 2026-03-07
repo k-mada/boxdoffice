@@ -195,7 +195,7 @@ async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Pong! 🏓")
 
 
-@tree.command(name="box-office", description="Get the box office gross for a movie")
+@tree.command(name="boxoffice", description="Get the box office gross for a movie")
 @app_commands.describe(movie="Movie name, optionally followed by year (e.g. 'sabrina 1995')")
 async def box_office(interaction: discord.Interaction, movie: str):
     await interaction.response.defer()  # gives us time to call the API
@@ -244,7 +244,7 @@ async def box_office(interaction: discord.Interaction, movie: str):
     await interaction.followup.send(embed=embed)
 
 
-@tree.command(name="weekend", description="Get this weekend's top 10 box office films")
+@tree.command(name="weekendtop10", description="Get this weekend's top 10 box office films")
 async def weekend(interaction: discord.Interaction):
     await interaction.response.defer()
 
@@ -273,7 +273,7 @@ async def weekend(interaction: discord.Interaction):
 async def on_ready():
     await tree.sync()
     print(f"✅ Bot is online as {client.user}")
-    print(f"   Slash commands synced — try /ping, /box-office, or /weekend")
+    print(f"   Slash commands synced — try /ping, /boxoffice, or /weekendtop10")
 
 
 if __name__ == "__main__":
