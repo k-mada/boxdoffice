@@ -12,7 +12,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
@@ -29,49 +28,45 @@ CACHE_DURATION = 3600  # refresh at most once per hour
 
 
 # ---------------------------------------------------------------------------
-# TMDB helpers (used by /box-office)
+# Box Office Mojo helpers (used by /boxoffice)
 # ---------------------------------------------------------------------------
-def search_movie(query: str) -> dict | None:
-    """
-    Search TMDB for a movie, then fetch its full details (which include revenue).
-    If the query ends with a 4-digit year (e.g. "sabrina 1995"), it is extracted
-    and passed as primary_release_year for a more precise match.
-    """
-    # Extract a trailing year like "sabrina 1995" → query="sabrina", year=1995
-    year = None
-    match = re.search(r'\b((?:19|20)\d{2})\s*$', query)
-    if match:
-        year = match.group(1)
-        query = query[:match.start()].strip()
-
-    search_url = "https://api.themoviedb.org/3/search/movie"
-    params = {"api_key": TMDB_API_KEY, "query": query}
-    if year:
-        params["primary_release_year"] = year
-    results = requests.get(search_url, params=params).json().get("results", [])
-
-    # If no results with the year filter, fall back to an unfiltered search
-    if not results and year:
-        params.pop("primary_release_year")
-        results = requests.get(search_url, params=params).json().get("results", [])
-
-    if not results:
-        return None
-
-    # Take the top result and fetch full details (search results don't include revenue)
-    movie_id = results[0]["id"]
-    details_url = f"https://api.themoviedb.org/3/movie/{movie_id}"
-    details = requests.get(details_url, params={"api_key": TMDB_API_KEY}).json()
-    return details
+def _bom_search(query: str, year: str | None = None) -> str | None:
+    """Search BOM and return the title page URL for the best match."""
+    q = f"{query} {year}" if year else query
+    search_url = f"https://www.boxofficemojo.com/search/?q={requests.utils.quote(q)}"
+    resp = requests.get(search_url, headers=HEADERS, timeout=10)
+    soup = BeautifulSoup(resp.text, "html.parser")
+    link = soup.find("a", href=re.compile(r"/title/tt\d+/"))
+    if link:
+        path = link["href"].split("?")[0]
+        return f"https://www.boxofficemojo.com{path}"
+    return None
 
 
-def format_currency(amount: int) -> str:
-    """Turn a raw dollar amount into a readable string like $1.2B or $345.6M."""
-    if amount >= 1_000_000_000:
-        return f"${amount / 1_000_000_000:.2f}B"
-    if amount >= 1_000_000:
-        return f"${amount / 1_000_000:.1f}M"
-    return f"${amount:,}"
+def _bom_scrape_grosses(title_url: str) -> dict | None:
+    """Scrape domestic/international/worldwide gross from a BOM title page."""
+    resp = requests.get(title_url, headers=HEADERS, timeout=10)
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    h1 = soup.select_one("h1")
+    title = h1.get_text(strip=True) if h1 else "Unknown"
+
+    money_re = re.compile(r"^\$[\d,]+$")
+    lines = [l.strip() for l in soup.get_text(separator="\n").split("\n") if l.strip()]
+
+    result = {"title": title, "domestic": None, "international": None, "worldwide": None}
+    for i, line in enumerate(lines):
+        for j in range(i + 1, min(i + 5, len(lines))):
+            if money_re.match(lines[j]):
+                if line.startswith("Domestic") and result["domestic"] is None:
+                    result["domestic"] = lines[j]
+                elif line.startswith("International") and result["international"] is None:
+                    result["international"] = lines[j]
+                elif line == "Worldwide" and result["worldwide"] is None:
+                    result["worldwide"] = lines[j]
+                break
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -208,49 +203,35 @@ async def ping(interaction: discord.Interaction):
 @tree.command(name="boxoffice", description="Get the box office gross for a movie")
 @app_commands.describe(movie="Movie name, optionally followed by year (e.g. 'sabrina 1995')")
 async def box_office(interaction: discord.Interaction, movie: str):
-    await interaction.response.defer()  # gives us time to call the API
+    await interaction.response.defer()
 
-    data = search_movie(movie)
+    # Extract optional trailing year from query
+    year = None
+    m = re.search(r'\b((?:19|20)\d{2})\s*$', movie)
+    if m:
+        year = m.group(1)
+        movie = movie[:m.start()].strip()
 
-    if not data:
-        await interaction.followup.send(f"Couldn't find a movie matching **{movie}**.")
+    title_url = await asyncio.to_thread(_bom_search, movie, year)
+
+    if not title_url:
+        await interaction.followup.send(f"Couldn't find **{movie}** on Box Office Mojo.")
         return
 
-    title = data.get("title", "Unknown")
-    revenue = data.get("revenue", 0)
-    budget = data.get("budget", 0)
-    release = data.get("release_date", "N/A")
-    poster_path = data.get("poster_path")
+    data = await asyncio.to_thread(_bom_scrape_grosses, title_url)
+
+    if not data:
+        await interaction.followup.send("Found the movie but couldn't parse its gross data.")
+        return
 
     embed = discord.Embed(
-        title=f"🎬 {title}",
+        title=f"🎬 {data['title']}",
         color=discord.Color.gold(),
     )
-    embed.add_field(
-        name="Box Office Gross",
-        value=format_currency(revenue) if revenue else "Not reported",
-        inline=True,
-    )
-    embed.add_field(
-        name="Budget",
-        value=format_currency(budget) if budget else "Not reported",
-        inline=True,
-    )
-    embed.add_field(name="Release Date", value=release, inline=True)
-
-    if revenue and budget:
-        profit = revenue - budget
-        label = "Profit" if profit >= 0 else "Loss"
-        embed.add_field(
-            name=f"{label} (Gross − Budget)",
-            value=format_currency(abs(profit)),
-            inline=False,
-        )
-
-    if poster_path:
-        embed.set_thumbnail(url=f"https://image.tmdb.org/t/p/w200{poster_path}")
-
-    embed.set_footer(text="Data from TMDB • Revenue = worldwide lifetime gross")
+    embed.add_field(name="Domestic", value=data["domestic"] or "N/A", inline=True)
+    embed.add_field(name="International", value=data["international"] or "N/A", inline=True)
+    embed.add_field(name="Worldwide", value=data["worldwide"] or "N/A", inline=True)
+    embed.set_footer(text="Data from Box Office Mojo")
     await interaction.followup.send(embed=embed)
 
 
@@ -298,7 +279,5 @@ async def on_ready():
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
         print("❌ Error: DISCORD_TOKEN not found. Make sure your .env file is set up.")
-    elif not TMDB_API_KEY:
-        print("❌ Error: TMDB_API_KEY not found. Make sure your .env file is set up.")
     else:
         client.run(DISCORD_TOKEN)
