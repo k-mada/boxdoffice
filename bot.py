@@ -140,26 +140,29 @@ def _parse_chart(html: str) -> tuple[list[dict], str]:
     return results, date_label
 
 
+def _abbrev_gross(gross_str: str) -> str:
+    """Convert '$21,706,163' → '$21.7M'."""
+    digits = gross_str.replace("$", "").replace(",", "")
+    try:
+        amount = int(digits)
+    except ValueError:
+        return gross_str
+    if amount >= 1_000_000_000:
+        return f"${amount / 1_000_000_000:.2f}B"
+    if amount >= 1_000_000:
+        return f"${amount / 1_000_000:.1f}M"
+    return f"${amount / 1_000:.0f}K"
+
+
 def _format_chart_table(movies: list[dict]) -> str:
-    """Format the top 10 as a fixed-width code block table for Discord."""
-    TITLE_W = 20
-    GROSS_W = 10
-    THTR_W  = 6
-    CHG_W   = 8
-
-    header = f"{'#':>2}  {'Title':<{TITLE_W}}  {'Gross':>{GROSS_W}}  {'Thtr':>{THTR_W}}  {'Chg':>{CHG_W}}"
-    sep    = "─" * len(header)
-
-    lines = [header, sep]
+    """Format the top 10 as a markdown list that reflows on mobile."""
+    lines = []
     for m in movies:
-        title = m["title"]
-        if len(title) > TITLE_W:
-            title = title[:TITLE_W - 1] + "…"
-        lines.append(
-            f"{m['rank']:>2}  {title:<{TITLE_W}}  {m['gross']:>{GROSS_W}}  {m['theaters']:>{THTR_W}}  {m['change']:>{CHG_W}}"
-        )
-
-    return "```\n" + "\n".join(lines) + "\n```"
+        gross = _abbrev_gross(m["gross"])
+        chg = m["change"]
+        chg_str = " · 🆕" if chg == "NEW" else (f" · {chg}" if chg and chg != "-" else "")
+        lines.append(f"**{m['rank']}.** {m['title']} — {gross}{chg_str}")
+    return "\n".join(lines)
 
 
 def _fetch_weekend_chart(target_date: datetime.date | None = None) -> tuple[list[dict], str]:
