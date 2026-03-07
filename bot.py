@@ -239,7 +239,7 @@ async def box_office(interaction: discord.Interaction, movie: str):
     embed.add_field(name="Worldwide", value=data["worldwide"] or "N/A", inline=True)
     if poster_url:
         embed.set_thumbnail(url=poster_url)
-    embed.set_footer(text="Data from Box Office Mojo")
+    embed.set_footer(text="Source: boxofficemojo.com")
     await interaction.followup.send(embed=embed)
 
 
@@ -269,7 +269,7 @@ async def weekend(interaction: discord.Interaction, date: str | None = None):
         color=discord.Color.blue(),
     )
     embed.description = _format_chart_table(movies)
-    embed.set_footer(text="Data scraped from Box Office Mojo")
+    embed.set_footer(text="Source: boxofficemojo.com")
     await interaction.followup.send(embed=embed)
 
 
