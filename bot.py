@@ -30,17 +30,20 @@ CACHE_DURATION = 3600  # refresh at most once per hour
 # ---------------------------------------------------------------------------
 # Box Office Mojo helpers (used by /boxoffice)
 # ---------------------------------------------------------------------------
-def _bom_search(query: str, year: str | None = None) -> str | None:
-    """Search BOM and return the title page URL for the best match."""
+def _bom_search(query: str, year: str | None = None) -> tuple[str | None, str | None]:
+    """Search BOM and return (title_page_url, poster_url) for the best match."""
     q = f"{query} {year}" if year else query
     search_url = f"https://www.boxofficemojo.com/search/?q={requests.utils.quote(q)}"
     resp = requests.get(search_url, headers=HEADERS, timeout=10)
     soup = BeautifulSoup(resp.text, "html.parser")
     link = soup.find("a", href=re.compile(r"/title/tt\d+/"))
-    if link:
-        path = link["href"].split("?")[0]
-        return f"https://www.boxofficemojo.com{path}"
-    return None
+    if not link:
+        return None, None
+    path = link["href"].split("?")[0]
+    title_url = f"https://www.boxofficemojo.com{path}"
+    img = link.find("img")
+    poster_url = img["src"] if img and img.get("src") else None
+    return title_url, poster_url
 
 
 def _bom_scrape_grosses(title_url: str) -> dict | None:
@@ -212,7 +215,7 @@ async def box_office(interaction: discord.Interaction, movie: str):
         year = m.group(1)
         movie = movie[:m.start()].strip()
 
-    title_url = await asyncio.to_thread(_bom_search, movie, year)
+    title_url, poster_url = await asyncio.to_thread(_bom_search, movie, year)
 
     if not title_url:
         await interaction.followup.send(f"Couldn't find **{movie}** on Box Office Mojo.")
@@ -231,6 +234,8 @@ async def box_office(interaction: discord.Interaction, movie: str):
     embed.add_field(name="Domestic", value=data["domestic"] or "N/A", inline=True)
     embed.add_field(name="International", value=data["international"] or "N/A", inline=True)
     embed.add_field(name="Worldwide", value=data["worldwide"] or "N/A", inline=True)
+    if poster_url:
+        embed.set_thumbnail(url=poster_url)
     embed.set_footer(text="Data from Box Office Mojo")
     await interaction.followup.send(embed=embed)
 
