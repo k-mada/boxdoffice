@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import asyncio
 import datetime
@@ -31,13 +32,29 @@ CACHE_DURATION = 3600  # refresh at most once per hour
 # TMDB helpers (used by /box-office)
 # ---------------------------------------------------------------------------
 def search_movie(query: str) -> dict | None:
-    """Search TMDB for a movie, then fetch its full details (which include revenue)."""
+    """
+    Search TMDB for a movie, then fetch its full details (which include revenue).
+    If the query ends with a 4-digit year (e.g. "sabrina 1995"), it is extracted
+    and passed as primary_release_year for a more precise match.
+    """
+    # Extract a trailing year like "sabrina 1995" → query="sabrina", year=1995
+    year = None
+    match = re.search(r'\b((?:19|20)\d{2})\s*$', query)
+    if match:
+        year = match.group(1)
+        query = query[:match.start()].strip()
+
     search_url = "https://api.themoviedb.org/3/search/movie"
-    resp = requests.get(search_url, params={
-        "api_key": TMDB_API_KEY,
-        "query": query,
-    })
-    results = resp.json().get("results", [])
+    params = {"api_key": TMDB_API_KEY, "query": query}
+    if year:
+        params["primary_release_year"] = year
+    results = requests.get(search_url, params=params).json().get("results", [])
+
+    # If no results with the year filter, fall back to an unfiltered search
+    if not results and year:
+        params.pop("primary_release_year")
+        results = requests.get(search_url, params=params).json().get("results", [])
+
     if not results:
         return None
 
@@ -179,7 +196,7 @@ async def ping(interaction: discord.Interaction):
 
 
 @tree.command(name="box-office", description="Get the box office gross for a movie")
-@app_commands.describe(movie="The name of the movie to look up")
+@app_commands.describe(movie="Movie name, optionally followed by year (e.g. 'sabrina 1995')")
 async def box_office(interaction: discord.Interaction, movie: str):
     await interaction.response.defer()  # gives us time to call the API
 
