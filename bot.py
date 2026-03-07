@@ -86,17 +86,23 @@ HEADERS = {
 }
 
 
-def _weekend_url_candidates() -> list[str]:
+def _weekend_url_candidates(target_date: datetime.date | None = None) -> list[str]:
     """
-    Return BOM weekend URL candidates based on today's date, most recent first.
-    BOM uses ISO week numbers: /weekend/{YEAR}W{WEEK:02d}/
-    If today is Mon-Thu the last full weekend is last week; Fri-Sun it may be this week.
-    We yield the current week then the previous week as a fallback.
+    Return BOM weekend URL candidates most-recent-first.
+    BOM weekends run Fri-Sun. We find the most recent Friday on or before
+    target_date (defaulting to today) and build ISO-week URLs from there.
     """
-    today = datetime.date.today()
+    if target_date is None:
+        target_date = datetime.date.today()
+
+    # Find the most recent Friday on or before target_date
+    # isoweekday: Mon=1 ... Fri=5, Sat=6, Sun=7
+    days_since_friday = (target_date.isoweekday() - 5) % 7
+    friday = target_date - datetime.timedelta(days=days_since_friday)
+
     candidates = []
     for delta in (0, -1):
-        d = today + datetime.timedelta(weeks=delta)
+        d = friday + datetime.timedelta(weeks=delta)
         y, w, _ = d.isocalendar()
         candidates.append(f"https://www.boxofficemojo.com/weekend/{y}W{w:02d}/")
     return candidates
@@ -158,9 +164,9 @@ def _format_chart_table(movies: list[dict]) -> str:
     return "```\n" + "\n".join(lines) + "\n```"
 
 
-def _fetch_weekend_chart() -> tuple[list[dict], str]:
+def _fetch_weekend_chart(target_date: datetime.date | None = None) -> tuple[list[dict], str]:
     """Synchronous fetch — called via asyncio.to_thread so it won't block the event loop."""
-    for url in _weekend_url_candidates():
+    for url in _weekend_url_candidates(target_date):
         try:
             resp = requests.get(url, headers=HEADERS, timeout=10)
             resp.raise_for_status()
@@ -172,18 +178,22 @@ def _fetch_weekend_chart() -> tuple[list[dict], str]:
     return [], ""
 
 
-async def get_weekend_chart() -> tuple[list[dict], str]:
-    """Return the weekend chart, using the cache if still fresh."""
-    now = time.time()
-    if weekend_cache["data"] and (now - weekend_cache["timestamp"] < CACHE_DURATION):
-        return weekend_cache["data"], weekend_cache.get("date_label", "")
+async def get_weekend_chart(target_date: datetime.date | None = None) -> tuple[list[dict], str]:
+    """Return the weekend chart. Uses cache only for the default (most recent) case."""
+    if target_date is None:
+        now = time.time()
+        if weekend_cache["data"] and (now - weekend_cache["timestamp"] < CACHE_DURATION):
+            return weekend_cache["data"], weekend_cache.get("date_label", "")
 
-    data, date_label = await asyncio.to_thread(_fetch_weekend_chart)
-    if data:
-        weekend_cache["data"] = data
-        weekend_cache["date_label"] = date_label
-        weekend_cache["timestamp"] = now
-    return data, date_label
+        data, date_label = await asyncio.to_thread(_fetch_weekend_chart)
+        if data:
+            weekend_cache["data"] = data
+            weekend_cache["date_label"] = date_label
+            weekend_cache["timestamp"] = now
+        return data, date_label
+
+    # Historical lookup — always fetch fresh, no caching
+    return await asyncio.to_thread(_fetch_weekend_chart, target_date)
 
 
 # ---------------------------------------------------------------------------
@@ -244,15 +254,24 @@ async def box_office(interaction: discord.Interaction, movie: str):
     await interaction.followup.send(embed=embed)
 
 
-@tree.command(name="weekendtop10", description="Get this weekend's top 10 box office films")
-async def weekend(interaction: discord.Interaction):
+@tree.command(name="weekendtop10", description="Get a weekend's top 10 box office films")
+@app_commands.describe(date="Date in MM/DD/YYYY format — returns the closest weekend on or before that date")
+async def weekend(interaction: discord.Interaction, date: str | None = None):
+    target_date = None
+    if date is not None:
+        try:
+            target_date = datetime.datetime.strptime(date, "%m/%d/%Y").date()
+        except ValueError:
+            await interaction.response.send_message("Use the date format MM/DD/YYYY")
+            return
+
     await interaction.response.defer()
 
-    movies, date_label = await get_weekend_chart()
+    movies, date_label = await get_weekend_chart(target_date)
 
     if not movies:
         await interaction.followup.send(
-            "Couldn't fetch this weekend's chart. Box Office Mojo may be down or the page layout changed."
+            "Couldn't fetch the chart for that date. Box Office Mojo may not have data that far back, or the page layout changed."
         )
         return
 
