@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.discord.com)",
+      "Bash(git -C /Users/kevinyamada/projects/BoxdOffice rev-parse --show-toplevel)",
+      "Bash(python -m pytest test_bot.py -v)",
+      "Bash(python3 -m pytest test_bot.py -v)"
+    ]
+  }
+}

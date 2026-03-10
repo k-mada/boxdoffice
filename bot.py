@@ -2,16 +2,22 @@ import os
 import re
 import time
 import asyncio
+import logging
 import datetime
+from dataclasses import dataclass
+from urllib.parse import quote
 import discord
 from discord import app_commands
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+SYNC_ON_STARTUP = os.getenv("SYNC_ON_STARTUP", "").lower() in ("1", "true", "yes")
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
@@ -20,61 +26,16 @@ tree = app_commands.CommandTree(client)
 # ---------------------------------------------------------------------------
 # Cache for the weekend chart (so we don't scrape on every command)
 # ---------------------------------------------------------------------------
-weekend_cache = {
-    "data": None,
-    "timestamp": 0,
-}
+@dataclass
+class _WeekendCache:
+    data: list | None = None
+    date_label: str = ""
+    timestamp: float = 0.0
+
+_weekend_cache = _WeekendCache()
 CACHE_DURATION = 3600  # refresh at most once per hour
 
 
-# ---------------------------------------------------------------------------
-# Box Office Mojo helpers (used by /boxoffice)
-# ---------------------------------------------------------------------------
-def _bom_search(query: str, year: str | None = None) -> tuple[str | None, str | None]:
-    """Search BOM and return (title_page_url, poster_url) for the best match."""
-    q = f"{query} {year}" if year else query
-    search_url = f"https://www.boxofficemojo.com/search/?q={requests.utils.quote(q)}"
-    resp = requests.get(search_url, headers=HEADERS, timeout=10)
-    soup = BeautifulSoup(resp.text, "html.parser")
-    link = soup.find("a", href=re.compile(r"/title/tt\d+/"))
-    if not link:
-        return None, None
-    path = link["href"].split("?")[0]
-    title_url = f"https://www.boxofficemojo.com{path}"
-    img = link.find("img")
-    poster_url = img["src"] if img and img.get("src") else None
-    return title_url, poster_url
-
-
-def _bom_scrape_grosses(title_url: str) -> dict | None:
-    """Scrape domestic/international/worldwide gross from a BOM title page."""
-    resp = requests.get(title_url, headers=HEADERS, timeout=10)
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    h1 = soup.select_one("h1")
-    title = h1.get_text(strip=True) if h1 else "Unknown"
-
-    money_re = re.compile(r"^\$[\d,]+$")
-    lines = [l.strip() for l in soup.get_text(separator="\n").split("\n") if l.strip()]
-
-    result = {"title": title, "domestic": None, "international": None, "worldwide": None}
-    for i, line in enumerate(lines):
-        for j in range(i + 1, min(i + 5, len(lines))):
-            if money_re.match(lines[j]):
-                if line.startswith("Domestic") and result["domestic"] is None:
-                    result["domestic"] = lines[j]
-                elif line.startswith("International") and result["international"] is None:
-                    result["international"] = lines[j]
-                elif line == "Worldwide" and result["worldwide"] is None:
-                    result["worldwide"] = lines[j]
-                break
-
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Box Office Mojo scraper (used by /weekend)
-# ---------------------------------------------------------------------------
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -84,6 +45,97 @@ HEADERS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Box Office Mojo helpers (used by /boxoffice)
+# ---------------------------------------------------------------------------
+_MONEY_RE = re.compile(r"^\$[\d,]+$")
+
+
+def _parse_grosses(html: str) -> dict | None:
+    """
+    Parse domestic/international/worldwide gross from a BOM title page using
+    DOM traversal rather than flattening the page to text lines.
+    Returns a dict with title/domestic/international/worldwide, or None if
+    none of the gross values could be found.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    h1 = soup.select_one("h1")
+    title = h1.get_text(strip=True) if h1 else "Unknown"
+
+    def money_near(tag) -> str | None:
+        """Return the first money value in tag's siblings or its parent's siblings."""
+        for node in tag.next_siblings:
+            if hasattr(node, "get_text") and _MONEY_RE.match(node.get_text(strip=True)):
+                return node.get_text(strip=True)
+        if tag.parent:
+            for node in tag.parent.next_siblings:
+                if hasattr(node, "get_text") and _MONEY_RE.match(node.get_text(strip=True)):
+                    return node.get_text(strip=True)
+        return None
+
+    result = {"title": title, "domestic": None, "international": None, "worldwide": None}
+
+    for node in soup.find_all(string=re.compile(r"^Domestic")):
+        if result["domestic"] is None:
+            result["domestic"] = money_near(node.parent)
+
+    for node in soup.find_all(string=re.compile(r"^International")):
+        if result["international"] is None:
+            result["international"] = money_near(node.parent)
+
+    for node in soup.find_all(string=re.compile(r"^Worldwide$")):
+        if result["worldwide"] is None:
+            result["worldwide"] = money_near(node.parent)
+
+    if not any(result[k] for k in ("domestic", "international", "worldwide")):
+        return None
+    return result
+
+
+def _bom_fetch_movie(query: str, year: str | None = None) -> dict | None:
+    """
+    Search BOM then scrape the title page in a single synchronous chain.
+    Returns a dict with title, domestic, international, worldwide, poster_url,
+    or None if the movie isn't found or the scrape fails.
+    """
+    # Step 1: search
+    q = f"{query} {year}" if year else query
+    search_url = f"https://www.boxofficemojo.com/search/?q={quote(q)}"
+    try:
+        resp = requests.get(search_url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        logger.error("Error searching BOM for %r: %s", q, e)
+        return None
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    link = soup.find("a", href=re.compile(r"/title/tt\d+/"))
+    if not link:
+        return None
+
+    path = link["href"].split("?")[0]
+    title_url = f"https://www.boxofficemojo.com{path}"
+    img = link.find("img")
+    poster_url = img["src"] if img and img.get("src") else None
+
+    # Step 2: scrape title page
+    try:
+        resp = requests.get(title_url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        logger.error("Error fetching BOM title page %s: %s", title_url, e)
+        return None
+
+    grosses = _parse_grosses(resp.text)
+    if not grosses:
+        return None
+    return {**grosses, "poster_url": poster_url}
+
+
+# ---------------------------------------------------------------------------
+# Box Office Mojo scraper (used by /weekend)
+# ---------------------------------------------------------------------------
 def _weekend_url_candidates(target_date: datetime.date | None = None) -> list[str]:
     """
     Return BOM weekend URL candidates most-recent-first.
@@ -109,13 +161,12 @@ def _weekend_url_candidates(target_date: datetime.date | None = None) -> list[st
 def _parse_chart(html: str) -> tuple[list[dict], str]:
     """
     Parse a BOM weekend detail page.
-    Column order: 0 Rank | 1 LW | 2 Title | 3 Weekend Gross | 4 %Chg |
-                  5 Theaters | 6 Thtr Chg | 7 Per-Thtr Avg | 8 Total Gross | 9 Weeks
+    Column positions are derived from the header row so any BOM schema change
+    produces an explicit log message and empty results rather than silent garbage.
     Returns (movies, date_label) where date_label comes from the page <h4>.
     """
     soup = BeautifulSoup(html, "html.parser")
 
-    # h4 contains the human-readable date range e.g. "February 27-March 1, 2026"
     h4 = soup.select_one("h4")
     date_label = h4.get_text(strip=True) if h4 else ""
 
@@ -123,18 +174,33 @@ def _parse_chart(html: str) -> tuple[list[dict], str]:
     if not table:
         return [], date_label
 
+    # Detect column indices from the header row
+    header_row = table.select_one("tr")
+    if not header_row:
+        return [], date_label
+    headers = [th.get_text(strip=True).lower() for th in header_row.select("th")]
+    try:
+        title_idx = next(i for i, h in enumerate(headers) if "title" in h)
+        gross_idx = next(i for i, h in enumerate(headers) if "gross" in h)
+        chg_idx   = next(i for i, h in enumerate(headers) if "%" in h)
+        thtr_idx  = next(i for i, h in enumerate(headers) if "thtr" in h or "theater" in h)
+    except StopIteration:
+        logger.error("Unexpected BOM table headers: %s", headers)
+        return [], date_label
+
+    min_cols = max(title_idx, gross_idx, chg_idx, thtr_idx) + 1
     results = []
     for row in table.select("tr")[1:11]:  # top 10 only
         cells = row.select("td")
-        if len(cells) < 6:
+        if len(cells) < min_cols:
             continue
-        change = cells[4].get_text(strip=True) if len(cells) > 4 else ""
+        change = cells[chg_idx].get_text(strip=True)
         results.append({
-            "rank": cells[0].get_text(strip=True),
-            "title": cells[2].get_text(strip=True),
-            "gross": cells[3].get_text(strip=True),
-            "change": change or "NEW",
-            "theaters": cells[5].get_text(strip=True),
+            "rank":     cells[0].get_text(strip=True),
+            "title":    cells[title_idx].get_text(strip=True),
+            "gross":    cells[gross_idx].get_text(strip=True),
+            "change":   change or "NEW",
+            "theaters": cells[thtr_idx].get_text(strip=True),
         })
 
     return results, date_label
@@ -175,7 +241,7 @@ def _fetch_weekend_chart(target_date: datetime.date | None = None) -> tuple[list
             if movies:
                 return movies, date_label
         except requests.RequestException as e:
-            print(f"Error fetching {url}: {e}")
+            logger.error("Error fetching %s: %s", url, e)
     return [], ""
 
 
@@ -183,14 +249,14 @@ async def get_weekend_chart(target_date: datetime.date | None = None) -> tuple[l
     """Return the weekend chart. Uses cache only for the default (most recent) case."""
     if target_date is None:
         now = time.time()
-        if weekend_cache["data"] and (now - weekend_cache["timestamp"] < CACHE_DURATION):
-            return weekend_cache["data"], weekend_cache.get("date_label", "")
+        if _weekend_cache.data and (now - _weekend_cache.timestamp < CACHE_DURATION):
+            return _weekend_cache.data, _weekend_cache.date_label
 
         data, date_label = await asyncio.to_thread(_fetch_weekend_chart)
         if data:
-            weekend_cache["data"] = data
-            weekend_cache["date_label"] = date_label
-            weekend_cache["timestamp"] = now
+            _weekend_cache.data = data
+            _weekend_cache.date_label = date_label
+            _weekend_cache.timestamp = now
         return data, date_label
 
     # Historical lookup — always fetch fresh, no caching
@@ -218,16 +284,10 @@ async def box_office(interaction: discord.Interaction, movie: str):
         year = m.group(1)
         movie = movie[:m.start()].strip()
 
-    title_url, poster_url = await asyncio.to_thread(_bom_search, movie, year)
-
-    if not title_url:
-        await interaction.followup.send(f"Couldn't find **{movie}** on Box Office Mojo.")
-        return
-
-    data = await asyncio.to_thread(_bom_scrape_grosses, title_url)
+    data = await asyncio.to_thread(_bom_fetch_movie, movie, year)
 
     if not data:
-        await interaction.followup.send("Found the movie but couldn't parse its gross data.")
+        await interaction.followup.send(f"Couldn't find **{movie}** on Box Office Mojo.")
         return
 
     embed = discord.Embed(
@@ -237,8 +297,8 @@ async def box_office(interaction: discord.Interaction, movie: str):
     embed.add_field(name="Domestic", value=data["domestic"] or "N/A", inline=True)
     embed.add_field(name="International", value=data["international"] or "N/A", inline=True)
     embed.add_field(name="Worldwide", value=data["worldwide"] or "N/A", inline=True)
-    if poster_url:
-        embed.set_thumbnail(url=poster_url)
+    if data["poster_url"]:
+        embed.set_thumbnail(url=data["poster_url"])
     embed.set_footer(text="Source: boxofficemojo.com")
     await interaction.followup.send(embed=embed)
 
@@ -279,13 +339,15 @@ async def weekend(interaction: discord.Interaction, date: str | None = None):
 
 @client.event
 async def on_ready():
-    await tree.sync()
-    print(f"✅ Bot is online as {client.user}")
-    print(f"   Slash commands synced — try /ping, /boxoffice, or /weekendtop10")
+    if SYNC_ON_STARTUP:
+        await tree.sync()
+        logger.info("Slash commands synced.")
+    logger.info("Bot is online as %s", client.user)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if not DISCORD_TOKEN:
-        print("❌ Error: DISCORD_TOKEN not found. Make sure your .env file is set up.")
+        logger.critical("DISCORD_TOKEN not found. Make sure your .env file is set up.")
     else:
         client.run(DISCORD_TOKEN)
