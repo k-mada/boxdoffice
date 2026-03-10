@@ -35,6 +35,16 @@ class _WeekendCache:
 _weekend_cache = _WeekendCache()
 CACHE_DURATION = 3600  # refresh at most once per hour
 
+# ---------------------------------------------------------------------------
+# Rate limiting — adjust these constants to tune allowed command frequency.
+# Each value is enforced per user across all servers.
+# ---------------------------------------------------------------------------
+BOXOFFICE_RATE   = 3     # max uses per window
+BOXOFFICE_WINDOW = 60.0  # window size in seconds
+
+WEEKEND_RATE     = 5
+WEEKEND_WINDOW   = 60.0
+
 
 HEADERS = {
     "User-Agent": (
@@ -273,6 +283,7 @@ async def ping(interaction: discord.Interaction):
 
 
 @tree.command(name="boxoffice", description="Get the box office gross for a movie")
+@app_commands.checks.cooldown(BOXOFFICE_RATE, BOXOFFICE_WINDOW, key=lambda i: i.user.id)
 @app_commands.describe(movie="Movie name, optionally followed by year (e.g. 'sabrina 1995')")
 async def box_office(interaction: discord.Interaction, movie: str):
     await interaction.response.defer()
@@ -304,6 +315,7 @@ async def box_office(interaction: discord.Interaction, movie: str):
 
 
 @tree.command(name="weekendtop10", description="Get a weekend's top 10 box office films")
+@app_commands.checks.cooldown(WEEKEND_RATE, WEEKEND_WINDOW, key=lambda i: i.user.id)
 @app_commands.describe(date="Date in MM/DD/YYYY format — returns the closest weekend on or before that date")
 async def weekend(interaction: discord.Interaction, date: str | None = None):
     target_date = None
@@ -336,6 +348,22 @@ async def weekend(interaction: discord.Interaction, date: str | None = None):
 # ---------------------------------------------------------------------------
 # Bot startup
 # ---------------------------------------------------------------------------
+
+@tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.CommandOnCooldown):
+        await interaction.response.send_message(
+            f"Too many people are accessing BoxdOffice right now. Try again in {error.retry_after:.0f}s.",
+            ephemeral=True,
+        )
+    else:
+        logger.error("Unhandled app command error in /%s: %s", interaction.command and interaction.command.name, error)
+        msg = "Something went wrong. Please try again."
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+
 
 @client.event
 async def on_ready():
