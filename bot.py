@@ -259,10 +259,13 @@ def _fetch_yearly_top10(year: str) -> list[dict]:
         cells = row.select("td")
         if len(cells) < 3:
             continue
+        link = cells[1].find("a", href=True)
+        title_url = f"https://www.boxofficemojo.com{link['href'].split('?')[0]}" if link else None
         results.append({
             "rank": cells[0].get_text(strip=True),
             "title": cells[1].get_text(strip=True),
-            "gross": cells[2].get_text(strip=True),
+            "worldwide": cells[2].get_text(strip=True),
+            "title_url": title_url,
         })
 
     return results
@@ -287,10 +290,20 @@ async def yearly_top10(interaction: discord.Interaction, year: str):
         await interaction.followup.send(f"No data found for **{year}**. Box Office Mojo may not have records for that year.")
         return
 
+    # Fetch domestic gross for each movie concurrently
+    async def _get_domestic(title_url: str | None) -> str | None:
+        if not title_url:
+            return None
+        data = await asyncio.to_thread(_bom_scrape_grosses, title_url)
+        return data["domestic"] if data else None
+
+    domestics = await asyncio.gather(*[_get_domestic(m["title_url"]) for m in movies])
+
     lines = []
-    for m in movies:
-        gross = _abbrev_gross(m["gross"])
-        lines.append(f"**{m['rank']}.** {m['title']} — {gross}")
+    for m, domestic in zip(movies, domestics):
+        ww = _abbrev_gross(m["worldwide"])
+        dom_str = f" · Domestic: {_abbrev_gross(domestic)}" if domestic else ""
+        lines.append(f"**{m['rank']}.** {m['title']} — WW: {ww}{dom_str}")
 
     embed = discord.Embed(
         title=f"🎬 Top 10 Grossing Movies of {year}",
