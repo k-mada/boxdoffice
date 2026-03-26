@@ -301,12 +301,11 @@ async def yearly_top10(interaction: discord.Interaction, year: str):
 
     lines = []
     for m, domestic in zip(movies, domestics):
-        ww = _abbrev_gross(m["worldwide"])
-        dom_str = f" · Domestic: {_abbrev_gross(domestic)}" if domestic else ""
-        lines.append(f"**{m['rank']}.** {m['title']} — WW: {ww}{dom_str}")
+        dom_str = f" — {_abbrev_gross(domestic)}" if domestic else ""
+        lines.append(f"**{m['rank']}.** {m['title']}{dom_str}")
 
     embed = discord.Embed(
-        title=f"🎬 Top 10 Grossing Movies of {year}",
+        title=f"🎬 Top 10 Grossing Movies of {year} (Domestic)",
         description="\n".join(lines),
         color=discord.Color.gold(),
     )
