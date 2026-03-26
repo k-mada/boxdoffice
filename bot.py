@@ -243,6 +243,64 @@ async def box_office(interaction: discord.Interaction, movie: str):
     await interaction.followup.send(embed=embed)
 
 
+def _fetch_yearly_top10(year: str) -> list[dict]:
+    """Scrape the top 10 grossing movies for a given year from BOM."""
+    url = f"https://www.boxofficemojo.com/year/{year}/"
+    resp = requests.get(url, headers=HEADERS, timeout=10)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    table = soup.select_one("table")
+    if not table:
+        return []
+
+    results = []
+    for row in table.select("tr")[1:11]:  # top 10 only
+        cells = row.select("td")
+        if len(cells) < 3:
+            continue
+        results.append({
+            "rank": cells[0].get_text(strip=True),
+            "title": cells[1].get_text(strip=True),
+            "gross": cells[2].get_text(strip=True),
+        })
+
+    return results
+
+
+@tree.command(name="yearlytop10", description="Get the top 10 grossing movies for a given year")
+@app_commands.describe(year="4-digit year (e.g. 1988)")
+async def yearly_top10(interaction: discord.Interaction, year: str):
+    if not re.fullmatch(r"(?:19|20)\d{2}", year):
+        await interaction.response.send_message("Please provide a valid 4-digit year (e.g. 1988).")
+        return
+
+    await interaction.response.defer()
+
+    try:
+        movies = await asyncio.to_thread(_fetch_yearly_top10, year)
+    except requests.RequestException:
+        await interaction.followup.send("Couldn't reach Box Office Mojo. Try again later.")
+        return
+
+    if not movies:
+        await interaction.followup.send(f"No data found for **{year}**. Box Office Mojo may not have records for that year.")
+        return
+
+    lines = []
+    for m in movies:
+        gross = _abbrev_gross(m["gross"])
+        lines.append(f"**{m['rank']}.** {m['title']} — {gross}")
+
+    embed = discord.Embed(
+        title=f"🎬 Top 10 Grossing Movies of {year}",
+        description="\n".join(lines),
+        color=discord.Color.gold(),
+    )
+    embed.set_footer(text="Source: boxofficemojo.com")
+    await interaction.followup.send(embed=embed)
+
+
 @tree.command(name="weekendtop10", description="Get a weekend's top 10 box office films")
 @app_commands.describe(date="Date in MM/DD/YYYY format — returns the closest weekend on or before that date")
 async def weekend(interaction: discord.Interaction, date: str | None = None):
@@ -281,7 +339,7 @@ async def weekend(interaction: discord.Interaction, date: str | None = None):
 async def on_ready():
     await tree.sync()
     print(f"✅ Bot is online as {client.user}")
-    print(f"   Slash commands synced — try /ping, /boxoffice, or /weekendtop10")
+    print(f"   Slash commands synced — try /ping, /boxoffice, /weekendtop10, or /yearlytop10")
 
 
 if __name__ == "__main__":
