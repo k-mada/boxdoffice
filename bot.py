@@ -244,8 +244,8 @@ async def box_office(interaction: discord.Interaction, movie: str):
 
 
 def _fetch_yearly_top10(year: str) -> list[dict]:
-    """Scrape the top 10 grossing movies for a given year from BOM."""
-    url = f"https://www.boxofficemojo.com/year/{year}/"
+    """Scrape the top 10 grossing movies for a given year from BOM, sorted by total gross."""
+    url = f"https://www.boxofficemojo.com/year/{year}/?sort=grossToDate"
     resp = requests.get(url, headers=HEADERS, timeout=10)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
@@ -300,9 +300,9 @@ async def yearly_top10(interaction: discord.Interaction, year: str):
     domestics = await asyncio.gather(*[_get_domestic(m["title_url"]) for m in movies])
 
     lines = []
-    for m, domestic in zip(movies, domestics):
+    for i, (m, domestic) in enumerate(zip(movies, domestics), start=1):
         dom_str = f" — {_abbrev_gross(domestic)}" if domestic else ""
-        lines.append(f"**{m['rank']}.** {m['title']}{dom_str}")
+        lines.append(f"**{i}.** {m['title']}{dom_str}")
 
     embed = discord.Embed(
         title=f"🎬 Top 10 Grossing Movies of {year} (Domestic)",
