@@ -257,11 +257,11 @@ def _fetch_yearly_top10(year: str) -> list[dict]:
     results = []
     for row in table.select("tr")[1:11]:  # top 10 only
         cells = row.select("td")
-        if len(cells) < 4:
+        if len(cells) < 6:
             continue
         results.append({
             "title": cells[1].get_text(strip=True),
-            "gross": cells[3].get_text(strip=True),
+            "gross": cells[5].get_text(strip=True),
         })
 
     return results
