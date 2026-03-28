@@ -245,7 +245,7 @@ async def box_office(interaction: discord.Interaction, movie: str):
 
 def _fetch_yearly_top10(year: str) -> list[dict]:
     """Scrape the top 10 grossing movies for a given year from BOM, sorted by total gross."""
-    url = f"https://www.boxofficemojo.com/year/{year}/?sort=grossToDate"
+    url = f"https://www.boxofficemojo.com/year/{year}/?grossesOption=totalGrosses&sort=rank&sortDir=asc"
     resp = requests.get(url, headers=HEADERS, timeout=10)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
@@ -257,14 +257,12 @@ def _fetch_yearly_top10(year: str) -> list[dict]:
     results = []
     for row in table.select("tr")[1:11]:  # top 10 only
         cells = row.select("td")
-        if len(cells) < 3:
+        if len(cells) < 2:
             continue
         link = cells[1].find("a", href=True)
         title_url = f"https://www.boxofficemojo.com{link['href'].split('?')[0]}" if link else None
         results.append({
-            "rank": cells[0].get_text(strip=True),
             "title": cells[1].get_text(strip=True),
-            "worldwide": cells[2].get_text(strip=True),
             "title_url": title_url,
         })
 
