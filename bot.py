@@ -218,13 +218,17 @@ async def box_office(interaction: discord.Interaction, movie: str):
         year = m.group(1)
         movie = movie[:m.start()].strip()
 
-    title_url, poster_url = await asyncio.to_thread(_bom_search, movie, year)
+    try:
+        title_url, poster_url = await asyncio.to_thread(_bom_search, movie, year)
 
-    if not title_url:
-        await interaction.followup.send(f"Couldn't find **{movie}** on Box Office Mojo.")
+        if not title_url:
+            await interaction.followup.send(f"Couldn't find **{movie}** on Box Office Mojo.")
+            return
+
+        data = await asyncio.to_thread(_bom_scrape_grosses, title_url)
+    except requests.RequestException:
+        await interaction.followup.send("Couldn't reach Box Office Mojo. Try again later.")
         return
-
-    data = await asyncio.to_thread(_bom_scrape_grosses, title_url)
 
     if not data:
         await interaction.followup.send("Found the movie but couldn't parse its gross data.")
