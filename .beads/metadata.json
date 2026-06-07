@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "BoxdOffice",
+  "project_id": "3eb5c9ed-267c-412d-b91e-45f3a1db4cb0"
+}
