@@ -33,6 +33,18 @@ CACHE_DURATION = 3600  # refresh at most once per hour
 
 
 # ---------------------------------------------------------------------------
+# Shared HTTP headers for all Box Office Mojo requests
+# ---------------------------------------------------------------------------
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+}
+
+
+# ---------------------------------------------------------------------------
 # Box Office Mojo helpers (used by /boxoffice)
 # ---------------------------------------------------------------------------
 def _bom_search(query: str, year: str | None = None) -> tuple[str | None, str | None]:
@@ -80,15 +92,6 @@ def _bom_scrape_grosses(title_url: str) -> dict | None:
 # ---------------------------------------------------------------------------
 # Box Office Mojo scraper (used by /weekend)
 # ---------------------------------------------------------------------------
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    )
-}
-
-
 def _weekend_url_candidates(target_date: datetime.date | None = None) -> list[str]:
     """
     Return BOM weekend URL candidates most-recent-first.
