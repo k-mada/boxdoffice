@@ -1,8 +1,9 @@
 .env
 __pycache__/
-.claude/worktrees/
+.claude/
 
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
 .beads-credential-key
+

@@ -1,67 +1,48 @@
-# 🎬 Box Office Discord Bot
+# 🎬 BoxdOffice Discord Bot
 
-A Discord bot with two commands:
+A Discord bot that pulls box office data from [Box Office Mojo](https://www.boxofficemojo.com/).
 
-- `/box-office <movie>` — Look up the lifetime box office gross for any movie (via TMDB)
-- `/weekend` — See this weekend's top 10 box office chart (scraped from Box Office Mojo)
-- `/ping` — Check if the bot is alive
+## Commands
+
+- `/ping` — Check that the bot is alive.
+- `/boxoffice <movie>` — Look up Domestic / International / Worldwide gross for a movie. Accepts an optional trailing year to disambiguate (e.g. `sabrina 1995`).
+- `/weekendtop10 [date]` — Top 10 films for a weekend. With no argument, returns the most recent weekend. With a `MM/DD/YYYY` date, returns the closest weekend on or before that date.
+- `/yearlytop10 <year>` — Top 10 grossing films released in a given 4-digit year, ranked by total domestic gross.
+
+All data is scraped from Box Office Mojo. No third-party API keys are needed.
 
 ---
 
-## Setup Guide
+## Setup
 
-### Step 1: Install Python
+### 1. Install Python
 
-Download Python 3.11+ from [python.org](https://www.python.org/downloads/).
+Python 3.10+ is required (the code uses PEP 604 `X | None` syntax). Get it from [python.org](https://www.python.org/downloads/).
 
-**Windows users:** Check the box that says **"Add Python to PATH"** during installation.
+### 2. Create a Discord application
 
-Verify it works by opening a terminal and running:
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) and click **New Application**.
+2. Open the **Bot** tab → **Reset Token** → copy the token somewhere safe. You do *not* need to enable any Privileged Gateway Intents; slash commands don't require Message Content Intent.
+3. Open the **OAuth2** tab → **URL Generator**:
+   - Scopes: `bot`, `applications.commands`
+   - Bot permissions: `Send Messages`, `Embed Links`
+4. Open the generated URL and invite the bot to your server.
 
-```
-python --version
-```
-
-### Step 2: Create a Discord Bot
-
-1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
-2. Click **"New Application"** → give it a name like "Box Office Bot"
-3. Go to the **Bot** tab on the left
-4. Click **"Reset Token"** → copy the token and save it somewhere safe
-5. Scroll down and toggle on **Message Content Intent**
-6. Go to the **OAuth2** tab
-7. Under **OAuth2 URL Generator**, check these scopes:
-   - `bot`
-   - `applications.commands`
-8. Under **Bot Permissions**, check:
-   - `Send Messages`
-   - `Use Slash Commands`
-9. Copy the generated URL at the bottom → paste it in your browser → invite the bot to your server
-
-### Step 3: Get a TMDB API Key
-
-1. Sign up at [themoviedb.org](https://www.themoviedb.org/)
-2. Go to **Settings → API**
-3. Request an API key (choose Developer, say it's for personal use)
-4. Copy the API key (v3 auth)
-
-### Step 4: Set Up the Project
-
-Open a terminal, navigate to this folder, and run:
+### 3. Install dependencies
 
 ```
 pip install -r requirements.txt
 ```
 
-Then copy the example environment file and fill in your keys:
+### 4. Configure the token
+
+Create a `.env` file in the project root:
 
 ```
-cp .env.example .env
+DISCORD_TOKEN=your-token-here
 ```
 
-Open `.env` in your editor and replace the placeholder values with your actual Discord token and TMDB API key.
-
-### Step 5: Run the Bot
+### 5. Run the bot
 
 ```
 python bot.py
@@ -71,31 +52,43 @@ You should see:
 
 ```
 ✅ Bot is online as YourBotName#1234
-   Slash commands synced — try /ping, /box-office, or /weekend
+   Slash commands synced — try /ping, /boxoffice, /weekendtop10, or /yearlytop10
 ```
 
-Go to your Discord server and try `/ping` first. Slash commands can take a few minutes to appear the first time.
+Global slash commands can take up to an hour to propagate the first time you sync them. After that, they appear immediately.
+
+---
+
+## Deployment
+
+A `Procfile` is included for [Railway](https://railway.app/) / Heroku-style worker dynos:
+
+```
+worker: python bot.py
+```
+
+Set `DISCORD_TOKEN` as an environment variable in the host's dashboard.
 
 ---
 
 ## Troubleshooting
 
 **Slash commands don't show up**
-They can take up to an hour to register globally. Wait a bit and restart Discord.
+Global commands take up to an hour the first time. Restart your Discord client after waiting.
 
-**"DISCORD_TOKEN not found"**
-Make sure your `.env` file is in the same folder as `bot.py`, and that there are no extra spaces or quotes around the values.
+**`DISCORD_TOKEN not found`**
+The `.env` file must be in the same folder as `bot.py`, with no quotes around the token value.
 
-**Bot goes offline when I close the terminal**
-The bot only runs while the script is running. For 24/7 hosting, look into Oracle Cloud free tier, a Raspberry Pi, or Railway.app.
+**`/weekendtop10` or `/boxoffice` returns nothing**
+Box Office Mojo occasionally changes its HTML. The scraper relies on column order in the weekend chart table (see `_parse_chart` in `bot.py`) and on label-then-amount text patterns for the title page (see `_bom_scrape_grosses`). Inspect the live page and adjust selectors when this breaks.
 
-**Weekend chart returns empty**
-Box Office Mojo occasionally changes their HTML layout. If the scraper breaks, the column indices in `scrape_weekend_chart()` may need adjusting. Inspect the page source to find the correct positions.
+**Bot goes offline when the terminal closes**
+The bot only runs while the script does. For 24/7 use, deploy to Railway, a Raspberry Pi, or any always-on host.
 
 ---
 
 ## Notes
 
-- The `/box-office` command returns **worldwide lifetime gross** from TMDB. This is not a live daily number — it's updated periodically by the TMDB community.
-- The `/weekend` command scrapes Box Office Mojo and caches results for 1 hour to avoid hitting the site too often.
-- Box Office Mojo does not have a public API, so the scraper may break if they change their site. This is normal — just update the parsing logic when it happens.
+- `/weekendtop10` results are cached for 1 hour (default-date only — historical lookups always re-fetch). See `CACHE_DURATION` in `bot.py`.
+- `/yearlytop10` ranks by **total domestic lifetime gross** of films released that year, not by gross earned within the calendar year.
+- Box Office Mojo has no public API; if they change their site, the scraper will need updates.
