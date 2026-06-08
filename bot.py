@@ -13,8 +13,13 @@ load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
+class BoxdOfficeClient(discord.Client):
+    async def setup_hook(self):
+        await tree.sync()
+
+
 intents = discord.Intents.default()
-client = discord.Client(intents=intents)
+client = BoxdOfficeClient(intents=intents)
 tree = app_commands.CommandTree(client)
 
 # ---------------------------------------------------------------------------
@@ -340,7 +345,6 @@ async def weekend(interaction: discord.Interaction, date: str | None = None):
 
 @client.event
 async def on_ready():
-    await tree.sync()
     print(f"✅ Bot is online as {client.user}")
     print(f"   Slash commands synced — try /ping, /boxoffice, /weekendtop10, or /yearlytop10")
 
